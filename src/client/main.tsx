@@ -172,8 +172,6 @@ function App() {
     }
     return state.seats[state.currentTurnSeat]?.nickname ?? "无";
   }, [state]);
-  const currentTurnSeatIndex = state?.currentTurnSeat ?? null;
-  const currentTurnSeat = state && currentTurnSeatIndex !== null ? state.seats[currentTurnSeatIndex] : null;
   const isYourTurn = Boolean(state?.legalActions.isYourTurn);
 
   if (!roomId) {
@@ -240,15 +238,11 @@ function App() {
             <div className="table-status">
               <span>{phaseLabels[state.phase]}</span>
               <span>底池 {state.pot}</span>
-              <span className={isYourTurn ? "status-turn yours" : "status-turn"}>行动 {currentTurnName}</span>
+              <span key={turnPulseKey} className={isYourTurn ? "status-turn yours" : "status-turn"} aria-live="polite">
+                轮到 {currentTurnName}
+              </span>
             </div>
             <div className="poker-table">
-              {currentTurnSeat && (
-                <div key={turnPulseKey} className={`turn-banner ${isYourTurn ? "your-turn" : ""}`}>
-                  <span>{isYourTurn ? "轮到你行动" : "当前回合"}</span>
-                  <strong>{currentTurnSeat.nickname}</strong>
-                </div>
-              )}
               <div className="community">
                 {Array.from({ length: 5 }).map((_, index) => (
                   <CardView
