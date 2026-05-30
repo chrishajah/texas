@@ -280,10 +280,29 @@ input:focus {
   perspective: 900px;
 }
 
+.dealer-stage {
+  position: absolute;
+  top: 18%;
+  left: 50%;
+  z-index: 1;
+  width: clamp(132px, 15vw, 190px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.dealer-stage img {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 18px 22px rgba(2, 17, 12, 0.28));
+  opacity: 0.92;
+}
+
 .community {
   position: absolute;
   top: 42%;
   left: 50%;
+  z-index: 2;
   display: flex;
   gap: 10px;
   transform: translate(-50%, -50%);
@@ -294,6 +313,7 @@ input:focus {
   position: absolute;
   top: calc(42% + 92px);
   left: 50%;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -310,6 +330,7 @@ input:focus {
 
 .seat {
   position: absolute;
+  z-index: 3;
   width: min(210px, 28vw);
   min-height: 144px;
   border: 1px solid rgba(255, 255, 255, 0.34);
@@ -814,6 +835,11 @@ input[type="range"] {
     height: clamp(560px, calc(100vh - 142px), 640px);
   }
 
+  .dealer-stage {
+    top: 17%;
+    width: 132px;
+  }
+
   .community {
     gap: 6px;
   }
@@ -886,6 +912,12 @@ input[type="range"] {
     min-height: 820px;
     border-width: 8px;
     border-radius: 28px;
+  }
+
+  .dealer-stage {
+    top: 22%;
+    width: 118px;
+    opacity: 0.82;
   }
 
   .community {

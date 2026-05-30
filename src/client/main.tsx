@@ -243,6 +243,16 @@ function App() {
               </span>
             </div>
             <div className="poker-table">
+              <div className="dealer-stage" aria-hidden="true">
+                <img
+                  src="/dealer.png"
+                  alt=""
+                  onError={(event) => {
+                    event.currentTarget.onerror = null;
+                    event.currentTarget.src = "/dealer.svg";
+                  }}
+                />
+              </div>
               <div className="community">
                 {Array.from({ length: 5 }).map((_, index) => (
                   <CardView
