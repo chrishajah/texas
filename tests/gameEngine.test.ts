@@ -6,6 +6,7 @@ import {
   createRoom,
   getPublicState,
   joinRoom,
+  leaveSeat,
   startHand,
   takeSeat,
   type RoomState
@@ -58,16 +59,16 @@ describe("game engine", () => {
     room.communityCards = ["Ah", "Kh", "Qh", "Jh", "2c"];
     room.seats[0]!.committed = 100;
     room.seats[1]!.committed = 100;
-    room.seats[0]!.chips = 900;
-    room.seats[1]!.chips = 900;
+    players[0].chips = 900;
+    players[1].chips = 900;
     room.currentTurnSeat = 0;
 
     applyAction(room, players[0].id, { type: "checkCall" });
     applyAction(room, players[1].id, { type: "checkCall" });
 
     expect(room.phase).toBe("handComplete");
-    expect(room.seats[0]?.chips).toBe(1100);
-    expect(room.seats[1]?.chips).toBe(900);
+    expect(players[0].chips).toBe(1100);
+    expect(players[1].chips).toBe(900);
     expect(room.seats[0]?.handDescription).toMatch(/Royal Flush|Straight Flush/);
   });
 
@@ -81,12 +82,12 @@ describe("game engine", () => {
     ]);
     room.communityCards = ["2h", "3d", "7s", "9c", "Kd"];
     room.seats[0]!.committed = 50;
-    room.seats[0]!.chips = 0;
+    players[0].chips = 0;
     room.seats[0]!.allIn = true;
     room.seats[1]!.committed = 100;
-    room.seats[1]!.chips = 900;
+    players[1].chips = 900;
     room.seats[2]!.committed = 100;
-    room.seats[2]!.chips = 900;
+    players[2].chips = 900;
     room.currentTurnSeat = 1;
 
     expect(buildPots(room)).toEqual([
@@ -98,9 +99,33 @@ describe("game engine", () => {
     applyAction(room, players[2].id, { type: "checkCall" });
 
     expect(room.phase).toBe("handComplete");
-    expect(room.seats[0]?.chips).toBe(150);
-    expect(room.seats[1]?.chips).toBe(1000);
-    expect(room.seats[2]?.chips).toBe(900);
+    expect(players[0].chips).toBe(150);
+    expect(players[1].chips).toBe(1000);
+    expect(players[2].chips).toBe(900);
+  });
+
+  it("keeps chips on the player when leaving and taking a seat again", () => {
+    const { room, players } = setupSeatedRoom(2);
+    players[0].chips = 640;
+
+    leaveSeat(room, players[0].id);
+    takeSeat(room, players[0].id, 3);
+
+    expect(players[0].chips).toBe(640);
+    expect(getPublicState(room, players[0].id).seats[3]?.chips).toBe(640);
+  });
+
+  it("refreshes busted seated players before the next hand without requiring a reseat", () => {
+    const { room, players } = setupSeatedRoom(2);
+    players[0].chips = 0;
+    players[1].chips = 250;
+
+    startHand(room, players[0].id);
+
+    expect(room.phase).toBe("preflop");
+    expect(players[0].chips).toBe(995);
+    expect(players[1].chips).toBe(240);
+    expect(room.logs.some((entry) => entry.message.includes("补充娱乐筹码"))).toBe(true);
   });
 
   it("rejects illegal raises", () => {

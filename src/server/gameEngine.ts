@@ -38,6 +38,7 @@ export interface PlayerRecord {
   id: string;
   token: string;
   nickname: string;
+  chips: number;
   socketIds: Set<string>;
   connected: boolean;
 }
@@ -45,7 +46,6 @@ export interface PlayerRecord {
 export interface SeatState {
   playerId: string;
   nickname: string;
-  chips: number;
   connected: boolean;
   cards: Card[];
   currentBet: number;
@@ -151,6 +151,7 @@ export function joinRoom(room: RoomState, nickname: string, token: string): Play
     id: randomUUID(),
     token: cleanToken,
     nickname: cleanNickname,
+    chips: TABLE_SETTINGS.startingStack,
     socketIds: new Set(),
     connected: true
   };
@@ -182,7 +183,6 @@ export function takeSeat(room: RoomState, playerId: string, seatIndex: number): 
   }
 
   const previousSeatIndex = findSeatIndexByPlayer(room, playerId);
-  const preservedChips = previousSeatIndex !== null ? room.seats[previousSeatIndex]?.chips : undefined;
   if (previousSeatIndex !== null && previousSeatIndex !== seatIndex) {
     room.seats[previousSeatIndex] = null;
   }
@@ -190,7 +190,6 @@ export function takeSeat(room: RoomState, playerId: string, seatIndex: number): 
   room.seats[seatIndex] = {
     playerId,
     nickname: player.nickname,
-    chips: preservedChips ?? target?.chips ?? TABLE_SETTINGS.startingStack,
     connected: player.connected,
     cards: [],
     currentBet: 0,
@@ -254,10 +253,19 @@ export function startHand(room: RoomState, requestedByPlayerId: string): void {
 
   const activeIndexes = seatedIndexes(room).filter((index) => {
     const seat = room.seats[index];
-    return Boolean(seat && seat.chips > 0);
+    return Boolean(seat && getSeatChips(room, index) > 0);
   });
 
   if (activeIndexes.length < 2) {
+    refreshBustedSeatedPlayers(room);
+  }
+
+  const refreshedActiveIndexes = seatedIndexes(room).filter((index) => {
+    const seat = room.seats[index];
+    return Boolean(seat && getSeatChips(room, index) > 0);
+  });
+
+  if (refreshedActiveIndexes.length < 2) {
     throw new Error("至少需要 2 名有筹码的玩家坐下。");
   }
 
@@ -271,21 +279,21 @@ export function startHand(room: RoomState, requestedByPlayerId: string): void {
   room.actionDeadlineAt = null;
   room.showdownSeatIndexes = [];
 
-  for (const index of activeIndexes) {
+  for (const index of refreshedActiveIndexes) {
     const seat = mustGetSeat(room, index);
     seat.inHand = true;
   }
 
-  room.dealerIndex = chooseNextDealer(room, activeIndexes);
-  if (activeIndexes.length === 2) {
+  room.dealerIndex = chooseNextDealer(room, refreshedActiveIndexes);
+  if (refreshedActiveIndexes.length === 2) {
     room.smallBlindIndex = room.dealerIndex;
-    room.bigBlindIndex = nextActiveSeat(activeIndexes, room.smallBlindIndex);
+    room.bigBlindIndex = nextActiveSeat(refreshedActiveIndexes, room.smallBlindIndex);
   } else {
-    room.smallBlindIndex = nextActiveSeat(activeIndexes, room.dealerIndex);
-    room.bigBlindIndex = nextActiveSeat(activeIndexes, room.smallBlindIndex);
+    room.smallBlindIndex = nextActiveSeat(refreshedActiveIndexes, room.dealerIndex);
+    room.bigBlindIndex = nextActiveSeat(refreshedActiveIndexes, room.smallBlindIndex);
   }
 
-  const dealOrder = orderedActiveSeats(activeIndexes, room.smallBlindIndex);
+  const dealOrder = orderedActiveSeats(refreshedActiveIndexes, room.smallBlindIndex);
   for (let round = 0; round < 2; round += 1) {
     for (const index of dealOrder) {
       mustGetSeat(room, index).cards.push(drawCard(room));
@@ -330,7 +338,7 @@ export function applyAction(room: RoomState, playerId: string, action: PlayerAct
       seat.lastAction = "过牌";
       addLog(room, `${seat.nickname} 过牌`);
     } else {
-      const paid = commitChips(seat, toCall);
+      const paid = commitChips(room, seatIndex, toCall);
       seat.hasActed = true;
       seat.lastAction = paid < toCall ? `全下跟注 ${paid}` : `跟注 ${paid}`;
       addLog(room, `${seat.nickname} ${seat.lastAction}`);
@@ -349,7 +357,7 @@ export function applyAction(room: RoomState, playerId: string, action: PlayerAct
 
     const oldHighestBet = room.highestBet;
     const additional = totalBet - seat.currentBet;
-    commitChips(seat, additional);
+    commitChips(room, seatIndex, additional);
     registerRaise(room, seatIndex, oldHighestBet, seat.currentBet);
     seat.hasActed = true;
     seat.lastAction = oldHighestBet === 0 ? `下注 ${seat.currentBet}` : `加注到 ${seat.currentBet}`;
@@ -357,12 +365,12 @@ export function applyAction(room: RoomState, playerId: string, action: PlayerAct
   }
 
   if (action.type === "allIn") {
-    if (seat.chips <= 0) {
+    if (getSeatChips(room, seatIndex) <= 0) {
       throw new Error("没有可全下的筹码。");
     }
 
     const oldHighestBet = room.highestBet;
-    const paid = commitChips(seat, seat.chips);
+    const paid = commitChips(room, seatIndex, getSeatChips(room, seatIndex));
     if (seat.currentBet > oldHighestBet) {
       registerRaise(room, seatIndex, oldHighestBet, seat.currentBet);
     }
@@ -404,7 +412,7 @@ export function getPublicState(room: RoomState, viewerPlayerId: string | null): 
         seatIndex,
         playerId: seat.playerId,
         nickname: seat.nickname,
-        chips: seat.chips,
+        chips: getSeatChips(room, seatIndex),
         currentBet: seat.currentBet,
         committed: seat.committed,
         folded: seat.folded,
@@ -434,10 +442,7 @@ export function getPublicState(room: RoomState, viewerPlayerId: string | null): 
     highestBet: room.highestBet,
     minRaiseTo: getRoomMinRaiseTo(room),
     actionDeadlineAt: room.actionDeadlineAt,
-    canStart: ["waiting", "handComplete"].includes(room.phase) && seatedIndexes(room).filter((index) => {
-      const seat = room.seats[index];
-      return Boolean(seat && seat.chips > 0);
-    }).length >= 2,
+    canStart: ["waiting", "handComplete"].includes(room.phase) && seatedIndexes(room).length >= 2,
     legalActions:
       viewerSeatIndex !== null ? getLegalActionsForSeat(room, viewerSeatIndex) : emptyLegalActions(false),
     logs: room.logs.slice(-MAX_LOGS),
@@ -462,10 +467,11 @@ export function getLegalActionsForSeat(room: RoomState, seatIndex: number): Lega
     return emptyLegalActions(false);
   }
 
-  const callAmount = Math.max(0, Math.min(seat.chips, room.highestBet - seat.currentBet));
-  const maxRaiseTo = seat.currentBet + seat.chips;
+  const chips = getSeatChips(room, seatIndex);
+  const callAmount = Math.max(0, Math.min(chips, room.highestBet - seat.currentBet));
+  const maxRaiseTo = seat.currentBet + chips;
   const minRaiseTo = getMinimumRaiseTo(room);
-  const canRaise = seat.chips > callAmount && minRaiseTo !== null && maxRaiseTo >= minRaiseTo;
+  const canRaise = chips > callAmount && minRaiseTo !== null && maxRaiseTo >= minRaiseTo;
 
   return {
     isYourTurn,
@@ -476,7 +482,7 @@ export function getLegalActionsForSeat(room: RoomState, seatIndex: number): Lega
     canRaise,
     minRaiseTo: canRaise ? minRaiseTo : null,
     maxRaiseTo: canRaise ? maxRaiseTo : null,
-    canAllIn: seat.chips > 0
+    canAllIn: chips > 0
   };
 }
 
@@ -571,6 +577,30 @@ function seatedIndexes(room: RoomState): number[] {
     .map(({ index }) => index);
 }
 
+function getSeatChips(room: RoomState, seatIndex: number): number {
+  const seat = mustGetSeat(room, seatIndex);
+  return mustGetPlayer(room, seat.playerId).chips;
+}
+
+function addSeatChips(room: RoomState, seatIndex: number, amount: number): void {
+  const seat = mustGetSeat(room, seatIndex);
+  const player = mustGetPlayer(room, seat.playerId);
+  player.chips += amount;
+}
+
+function refreshBustedSeatedPlayers(room: RoomState): void {
+  for (const index of seatedIndexes(room)) {
+    const seat = mustGetSeat(room, index);
+    const player = mustGetPlayer(room, seat.playerId);
+    if (player.chips <= 0) {
+      player.chips = TABLE_SETTINGS.startingStack;
+      seat.allIn = false;
+      seat.lastAction = "补充筹码";
+      addLog(room, `${player.nickname} 补充娱乐筹码 ${TABLE_SETTINGS.startingStack}`);
+    }
+  }
+}
+
 function activeContenderIndexes(room: RoomState): number[] {
   return room.seats
     .map((seat, index) => ({ seat, index }))
@@ -581,7 +611,7 @@ function activeContenderIndexes(room: RoomState): number[] {
 function activeActorIndexes(room: RoomState): number[] {
   return room.seats
     .map((seat, index) => ({ seat, index }))
-    .filter(({ seat }) => seat && seat.inHand && !seat.folded && !seat.allIn && seat.chips > 0)
+    .filter(({ seat, index }) => seat && seat.inHand && !seat.folded && !seat.allIn && getSeatChips(room, index) > 0)
     .map(({ index }) => index);
 }
 
@@ -666,19 +696,21 @@ function postBlind(room: RoomState, seatIndex: number | null, blindAmount: numbe
   }
 
   const seat = mustGetSeat(room, seatIndex);
-  const paid = commitChips(seat, blindAmount);
+  const paid = commitChips(room, seatIndex, blindAmount);
   room.highestBet = Math.max(room.highestBet, seat.currentBet);
   room.lastRaiseSize = TABLE_SETTINGS.bigBlind;
   seat.lastAction = `${label} ${paid}`;
   addLog(room, `${seat.nickname} 下${label} ${paid}`);
 }
 
-function commitChips(seat: SeatState, requestedAmount: number): number {
-  const amount = Math.max(0, Math.min(seat.chips, Math.floor(requestedAmount)));
-  seat.chips -= amount;
+function commitChips(room: RoomState, seatIndex: number, requestedAmount: number): number {
+  const seat = mustGetSeat(room, seatIndex);
+  const player = mustGetPlayer(room, seat.playerId);
+  const amount = Math.max(0, Math.min(player.chips, Math.floor(requestedAmount)));
+  player.chips -= amount;
   seat.currentBet += amount;
   seat.committed += amount;
-  if (seat.chips === 0) {
+  if (player.chips === 0) {
     seat.allIn = true;
   }
   return amount;
@@ -736,7 +768,7 @@ function isBettingRoundComplete(room: RoomState): boolean {
 
   return contenders.every((index) => {
     const seat = mustGetSeat(room, index);
-    if (seat.allIn || seat.chips === 0) {
+    if (seat.allIn || getSeatChips(room, index) === 0) {
       return true;
     }
 
@@ -754,7 +786,7 @@ function findNextNeedingAction(room: RoomState, fromSeatIndex: number | null): n
       seat.inHand &&
       !seat.folded &&
       !seat.allIn &&
-      seat.chips > 0 &&
+      getSeatChips(room, candidate) > 0 &&
       (!seat.hasActed || seat.currentBet < room.highestBet)
     ) {
       return candidate;
@@ -817,7 +849,7 @@ function dealRemainingBoard(room: RoomState): void {
 function awardUncontested(room: RoomState, winnerSeatIndex: number): void {
   const winner = mustGetSeat(room, winnerSeatIndex);
   const pot = totalPot(room);
-  winner.chips += pot;
+  addSeatChips(room, winnerSeatIndex, pot);
   winner.lastAction = `赢得 ${pot}`;
   room.currentTurnSeat = null;
   room.actionDeadlineAt = null;
@@ -859,8 +891,7 @@ function settleShowdown(room: RoomState): void {
       .slice()
       .sort((a, b) => a - b)
       .forEach((winnerIndex, order) => {
-        const seat = mustGetSeat(room, winnerIndex);
-        seat.chips += share + (order < remainder ? 1 : 0);
+        addSeatChips(room, winnerIndex, share + (order < remainder ? 1 : 0));
       });
 
     const winnerNames = winnerIndexes.map((index) => mustGetSeat(room, index).nickname).join("、");
