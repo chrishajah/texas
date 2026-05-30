@@ -7,7 +7,7 @@ const host = process.env.HOST ?? "0.0.0.0";
 const isProduction = process.env.NODE_ENV === "production";
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
-const clientDist = path.resolve(currentDir, "../client");
+const clientDist = path.resolve(currentDir, "../../client");
 
 const { app, httpServer } = createPokerServer({
   clientDist: isProduction ? clientDist : undefined
