@@ -49,7 +49,13 @@ const suitLabels: Record<string, string> = {
 function App() {
   const roomId = getRoomIdFromPath();
   const socketRef = useRef<PokerSocket | null>(null);
+  const previousStateRef = useRef<PublicRoomState | null>(null);
+  const animationTimersRef = useRef<number[]>([]);
   const [state, setState] = useState<PublicRoomState | null>(null);
+  const [animatedCommunityIndexes, setAnimatedCommunityIndexes] = useState<number[]>([]);
+  const [animatedBetSeatIndexes, setAnimatedBetSeatIndexes] = useState<number[]>([]);
+  const [potPulseKey, setPotPulseKey] = useState(0);
+  const [turnPulseKey, setTurnPulseKey] = useState(0);
   const [nickname, setNickname] = useState(() => localStorage.getItem("texas:nickname") || "");
   const [isJoining, setIsJoining] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -69,6 +75,14 @@ function App() {
     socket.on("connect", () => setSocketReady(true));
     socket.on("disconnect", () => setSocketReady(false));
     socket.on("room:state", (nextState) => {
+      queueTableAnimations(previousStateRef.current, nextState, {
+        setAnimatedCommunityIndexes,
+        setAnimatedBetSeatIndexes,
+        setPotPulseKey,
+        setTurnPulseKey,
+        timers: animationTimersRef.current
+      });
+      previousStateRef.current = nextState;
       setState(nextState);
       setJoinedRoomId(nextState.roomId);
     });
@@ -79,6 +93,9 @@ function App() {
     return () => {
       socket.disconnect();
       socketRef.current = null;
+      previousStateRef.current = null;
+      animationTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      animationTimersRef.current = [];
       setSocketReady(false);
     };
   }, [roomId]);
@@ -150,6 +167,9 @@ function App() {
     }
     return state.seats[state.currentTurnSeat]?.nickname ?? "无";
   }, [state]);
+  const currentTurnSeatIndex = state?.currentTurnSeat ?? null;
+  const currentTurnSeat = state && currentTurnSeatIndex !== null ? state.seats[currentTurnSeatIndex] : null;
+  const isYourTurn = Boolean(state?.legalActions.isYourTurn);
 
   if (!roomId) {
     return (
@@ -215,15 +235,25 @@ function App() {
             <div className="table-status">
               <span>{phaseLabels[state.phase]}</span>
               <span>底池 {state.pot}</span>
-              <span>行动 {currentTurnName}</span>
+              <span className={isYourTurn ? "status-turn yours" : "status-turn"}>行动 {currentTurnName}</span>
             </div>
             <div className="poker-table">
+              {currentTurnSeat && (
+                <div key={turnPulseKey} className={`turn-banner ${isYourTurn ? "your-turn" : ""}`}>
+                  <span>{isYourTurn ? "轮到你行动" : "当前回合"}</span>
+                  <strong>{currentTurnSeat.nickname}</strong>
+                </div>
+              )}
               <div className="community">
                 {Array.from({ length: 5 }).map((_, index) => (
-                  <CardView key={index} card={state.communityCards[index] ?? null} />
+                  <CardView
+                    key={index}
+                    card={state.communityCards[index] ?? null}
+                    reveal={animatedCommunityIndexes.includes(index)}
+                  />
                 ))}
               </div>
-              <div className="pot-stack">
+              <div key={potPulseKey} className="pot-stack">
                 <CircleDollarSign size={22} />
                 <strong>{state.pot}</strong>
               </div>
@@ -233,6 +263,7 @@ function App() {
                   seat={seat}
                   seatIndex={index}
                   isMe={state.you?.seatIndex === index}
+                  isBetAnimating={animatedBetSeatIndexes.includes(index)}
                   canSit={!seat && ["waiting", "handComplete"].includes(state.phase)}
                   onSit={() => emit("seat:take", { seatIndex: index })}
                 />
@@ -338,12 +369,14 @@ function SeatView({
   seat,
   seatIndex,
   isMe,
+  isBetAnimating,
   canSit,
   onSit
 }: {
   seat: PublicRoomState["seats"][number];
   seatIndex: number;
   isMe: boolean;
+  isBetAnimating: boolean;
   canSit: boolean;
   onSit: () => void;
 }) {
@@ -388,7 +421,7 @@ function SeatView({
       </div>
       <div className="seat-footer">
         <span>{seat.chips}</span>
-        {seat.currentBet > 0 && <span>下注 {seat.currentBet}</span>}
+        {seat.currentBet > 0 && <span className={isBetAnimating ? "bet-chip animate" : "bet-chip"}>下注 {seat.currentBet}</span>}
       </div>
       {seat.lastAction && <div className="last-action">{seat.lastAction}</div>}
       {seat.handDescription && <div className="hand-rank">{seat.handDescription}</div>}
@@ -464,7 +497,7 @@ function ActionPanel({
   );
 }
 
-function CardView({ card, compact = false }: { card: Card | null; compact?: boolean }) {
+function CardView({ card, compact = false, reveal = false }: { card: Card | null; compact?: boolean; reveal?: boolean }) {
   if (!card) {
     return <div className={`card placeholder ${compact ? "compact" : ""}`} />;
   }
@@ -474,7 +507,7 @@ function CardView({ card, compact = false }: { card: Card | null; compact?: bool
   const isRed = suit === "h" || suit === "d";
 
   return (
-    <div className={`card ${isRed ? "red" : ""} ${compact ? "compact" : ""}`}>
+    <div className={`card ${isRed ? "red" : ""} ${compact ? "compact" : ""} ${reveal ? "reveal" : ""}`}>
       <span>{rankLabels[rank]}</span>
       <strong>{suitLabels[suit]}</strong>
     </div>
@@ -522,6 +555,54 @@ function copyRoomLink(setToast: (message: string | null) => void): void {
 function showToast(setToast: (message: string | null) => void, message: string): void {
   setToast(null);
   window.setTimeout(() => setToast(message), 10);
+}
+
+function queueTableAnimations(
+  previous: PublicRoomState | null,
+  next: PublicRoomState,
+  controls: {
+    setAnimatedCommunityIndexes: (indexes: number[]) => void;
+    setAnimatedBetSeatIndexes: (indexes: number[]) => void;
+    setPotPulseKey: (key: number) => void;
+    setTurnPulseKey: (key: number) => void;
+    timers: number[];
+  }
+): void {
+  if (!previous || previous.roomId !== next.roomId || previous.handNumber !== next.handNumber) {
+    controls.setTurnPulseKey(Date.now());
+    return;
+  }
+
+  const newCommunityIndexes = next.communityCards
+    .map((card, index) => ({ card, index }))
+    .filter(({ card, index }) => card && previous.communityCards[index] !== card)
+    .map(({ index }) => index);
+
+  if (newCommunityIndexes.length > 0) {
+    controls.setAnimatedCommunityIndexes(newCommunityIndexes);
+    controls.timers.push(window.setTimeout(() => controls.setAnimatedCommunityIndexes([]), 1300));
+  }
+
+  const betIndexes = next.seats
+    .map((seat, index) => ({ seat, index }))
+    .filter(({ seat, index }) => {
+      const previousSeat = previous.seats[index];
+      return Boolean(seat && previousSeat && seat.currentBet > previousSeat.currentBet);
+    })
+    .map(({ index }) => index);
+
+  if (betIndexes.length > 0) {
+    controls.setAnimatedBetSeatIndexes(betIndexes);
+    controls.timers.push(window.setTimeout(() => controls.setAnimatedBetSeatIndexes([]), 900));
+  }
+
+  if (next.pot !== previous.pot) {
+    controls.setPotPulseKey(Date.now());
+  }
+
+  if (next.currentTurnSeat !== previous.currentTurnSeat) {
+    controls.setTurnPulseKey(Date.now());
+  }
 }
 
 function clampNumber(value: string, min: number, max: number): number {
