@@ -51,12 +51,14 @@ function App() {
   const socketRef = useRef<PokerSocket | null>(null);
   const previousStateRef = useRef<PublicRoomState | null>(null);
   const animationTimersRef = useRef<number[]>([]);
+  const autoJoinAttemptedRef = useRef(false);
+  const savedNicknameRef = useRef(localStorage.getItem("texas:nickname") || "");
   const [state, setState] = useState<PublicRoomState | null>(null);
   const [animatedCommunityIndexes, setAnimatedCommunityIndexes] = useState<number[]>([]);
   const [animatedBetSeatIndexes, setAnimatedBetSeatIndexes] = useState<number[]>([]);
   const [potPulseKey, setPotPulseKey] = useState(0);
   const [turnPulseKey, setTurnPulseKey] = useState(0);
-  const [nickname, setNickname] = useState(() => localStorage.getItem("texas:nickname") || "");
+  const [nickname, setNickname] = useState(() => savedNicknameRef.current);
   const [isJoining, setIsJoining] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [socketReady, setSocketReady] = useState(false);
@@ -108,10 +110,13 @@ function App() {
   }, [state?.legalActions.canRaise, state?.legalActions.minRaiseTo, state?.legalActions.maxRaiseTo]);
 
   useEffect(() => {
-    if (roomId && nickname.trim() && !joinedRoomId && socketReady) {
-      void joinRoom(roomId, nickname);
+    if (roomId && socketReady && !joinedRoomId && !autoJoinAttemptedRef.current) {
+      autoJoinAttemptedRef.current = true;
+      if (savedNicknameRef.current.trim()) {
+        void joinRoom(roomId, savedNicknameRef.current);
+      }
     }
-  }, [roomId, nickname, joinedRoomId, socketReady]);
+  }, [roomId, joinedRoomId, socketReady]);
 
   async function createRoom() {
     setIsCreating(true);
